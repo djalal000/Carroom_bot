@@ -381,7 +381,7 @@ async def filter_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         car_id, user_id, username, model, year, price, phone, image_path, created_at = car
         
         caption = (
-            f"🆔 الإعلان رقم: `{car_id}`\n\n"
+           
             f"🚘 *{model}*\n"
             f"📅 السنة: {year}\n"
             f"💰 السعر: {price} مليون \n"
