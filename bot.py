@@ -451,9 +451,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, user_id, username, model, year, price, phone, image_path, created_at = car
         
         detail_text = (
-            f"📋 *معلومات الإعلان الكاملة*\n"
-            f"{'='*30}\n\n"
-            f"🆔 رقم الإعلان: `{car_id}`\n\n"
+          
             f"🚗 *تفاصيل السيارة:*\n"
             f"   • الموديل: *{model}*\n"
             f"   • سنة الصنع: {year}\n"
