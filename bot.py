@@ -1,548 +1,576 @@
+# bot.py
 import os
 import logging
 from dotenv import load_dotenv
 from telegram import (
-    Update, ReplyKeyboardMarkup, ReplyKeyboardRemove,
-    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+    Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
     ContextTypes, ConversationHandler, CallbackQueryHandler
 )
-from database import init_db, add_car, get_cars_under_price, get_car_by_id
+from database import init_db, add_car, get_cars_under_price, get_car_by_id, get_user_cars, delete_car, get_user_language, set_user_language
+from languages import LANGS
 
 # Load environment variables
 load_dotenv()
 
-# Configuration from .env
+# Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 IMAGES_DIR = os.getenv('IMAGES_DIR', 'car_images')
 
-# Validate required environment variables
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in .env file. Please add it.")
 
 # Conversation states
-MODEL, YEAR, PRICE, PHONE, IMAGE = range(5)
+MODEL, YEAR, PRICE, MILES, LOCATION, CONDITION, PHONE, IMAGE = range(8)
 
-# Logging setup
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Ensure image directory exists
+# Ensure directories
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
+# Translation helper
+def t(user_id, key, **kwargs):
+    lang = get_user_language(user_id)
+    text = LANGS.get(lang, LANGS['en']).get(key, key)
+    if kwargs:
+        return text.format(**kwargs)
+    return text
 
-# ----------- Helper Menu Buttons -------------
-def main_menu_keyboard():
-    """Persistent main menu with clear icons"""
+# Localized main menu
+def main_menu_keyboard(user_id):
+    lang = get_user_language(user_id)
     return ReplyKeyboardMarkup(
-        [
-            ["🚗 أضف سيارة", "🔍 تصفح السيارات"],
-            ["📊 إحصائيات", "ℹ️ مساعدة"]
-        ],
+        LANGS.get(lang, LANGS['en'])['main_menu'],
         resize_keyboard=True,
         is_persistent=True
     )
 
-
-def cancel_keyboard():
-    """Cancel button during operations"""
+# Localized cancel keyboard
+def cancel_keyboard(user_id):
+    lang = get_user_language(user_id)
     return ReplyKeyboardMarkup(
-        [["❌ إلغاء", "🏠 القائمة الرئيسية"]],
+        LANGS.get(lang, LANGS['en'])['cancel_menu'],
         resize_keyboard=True,
         one_time_keyboard=False
     )
 
-
-def explore_keyboard():
-    """Filter menu for browsing cars"""
+# Localized explore keyboard
+def explore_keyboard(user_id):
+    lang = get_user_language(user_id)
     return ReplyKeyboardMarkup(
-        [
-            ["💵 أقل من 50M", "💰 أقل من 100M"],
-            ["💎 أقل من 200M", "📋 كل السيارات"],
-            ["🏠 القائمة الرئيسية"]
-        ],
+        LANGS.get(lang, LANGS['en'])['explore_menu'],
         resize_keyboard=True
     )
 
+# Language selection keyboard
+def language_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇺🇸 English", callback_data="LANG_en"),
+            InlineKeyboardButton("🇫🇷 Français", callback_data="LANG_fr")
+        ],
+        [
+            InlineKeyboardButton("🇸🇦 العربية", callback_data="LANG_ar")
+        ]
+    ])
 
-# ----------- Bot Commands Setup -------------
+# Format car caption
+def format_car_caption(car, user_id, is_my_car=False):
+    car_id, _, username, model, year, price, miles, location, condition, phone, _, created_at = car
+    keys = LANGS[get_user_language(user_id)]
+    caption = (
+        f"<b>🚘 {model}</b>\n"
+        f"<b>{keys['year_label']}</b> {year}\n"
+        f"<b>{keys['price_label']}</b> ${price:,.0f}\n"
+        f"<b>{keys['miles_label']}</b> {miles:,}\n"
+        f"<b>{keys['location_label']}</b> {location}\n"
+        f"<b>{keys['condition_label']}</b> {condition}/10\n"
+        f"<b>{keys['phone_label']}</b> <code>{phone}</code>\n"
+        f"<b>{keys['posted_label']}</b> {created_at}\n\n"
+        f"{keys['manage_tip'] if is_my_car else keys['contact_tip']}"
+    )
+    return caption
+
+# Bot commands setup
 async def post_init(application: Application):
-    """Set bot commands menu"""
     commands = [
-        BotCommand("start", "🏠 القائمة الرئيسية"),
-        BotCommand("addcar", "🚗 إضافة سيارة جديدة"),
-        BotCommand("explore", "🔍 تصفح السيارات"),
-        BotCommand("stats", "📊 إحصائيات السوق"),
-        BotCommand("help", "ℹ️ المساعدة والدعم"),
-        BotCommand("cancel", "❌ إلغاء العملية الحالية")
+        BotCommand("start", "🏠 Main Menu"),
+        BotCommand("addcar", "🚗 Add New Car"),
+        BotCommand("explore", "🔍 Browse Cars"),
+        BotCommand("mycars", "🗂️ Manage My Cars"),
+        BotCommand("stats", "📊 Market Stats"),
+        BotCommand("help", "ℹ️ Help & Support"),
+        BotCommand("lang", "🌐 Change Language"),
+        BotCommand("cancel", "❌ Cancel Current Operation")
     ]
     await application.bot.set_my_commands(commands)
 
-
-# ----------- Start & Help -------------
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Welcome message with main menu"""
-    welcome_msg = (
-        "🎉 *مرحباً بك في سوق السيارات!*\n\n"
-        "🚗 منصتك المثالية لشراء وبيع السيارات\n\n"
-        "*ماذا تريد أن تفعل؟*\n"
-        "• 🚗 *أضف سيارة* - لعرض سيارتك للبيع\n"
-        "• 🔍 *تصفح السيارات* - للبحث عن سيارة مناسبة\n"
-        "• 📊 *إحصائيات* - معلومات عن السوق\n"
-        "• ℹ️ *مساعدة* - دليل الاستخدام\n\n"
-        "💡 *نصيحة:* يمكنك الوصول للأوامر من القائمة أسفل الشاشة أو من زر القائمة بجانب حقل الكتابة 📝"
-    )
+    user_id = update.message.from_user.id
     await update.message.reply_text(
-        welcome_msg,
-        reply_markup=main_menu_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'welcome'),
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
     )
 
-
+# Help command
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help and instructions"""
-    help_text = (
-        "📖 *دليل استخدام البوت*\n\n"
-        "*🚗 لإضافة سيارة:*\n"
-        "1️⃣ اضغط على 'أضف سيارة'\n"
-        "2️⃣ أدخل معلومات السيارة خطوة بخطوة\n"
-        "3️⃣ أرسل صورة واضحة للسيارة\n\n"
-        "*🔍 للبحث عن سيارة:*\n"
-        "1️⃣ اضغط على 'تصفح السيارات'\n"
-        "2️⃣ اختر نطاق السعر المناسب\n"
-        "3️⃣ تصفح النتائج واتصل بالبائع\n\n"
-        "*💡 نصائح مهمة:*\n"
-        "• استخدم القائمة الدائمة أسفل الشاشة\n"
-        "• يمكنك إلغاء أي عملية بالضغط على 'إلغاء'\n"
-        "• الأسعار بالمليون دينار جزائري\n\n"
-        "*🆘 بحاجة لمساعدة؟*\n"
-        "تواصل مع: @support_username"
-    )
+    user_id = update.message.from_user.id
     await update.message.reply_text(
-        help_text,
-        reply_markup=main_menu_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'help'),
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
     )
 
-
+# Stats command
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show marketplace statistics"""
-    all_cars = get_cars_under_price(10**9, limit=1000)
+    user_id = update.message.from_user.id
+    all_cars = get_cars_under_price(1000000, limit=1000)
     total = len(all_cars)
-    
-    under_50 = len([c for c in all_cars if c[5] < 50])
-    under_100 = len([c for c in all_cars if c[5] < 100])
-    under_200 = len([c for c in all_cars if c[5] < 200])
-    
-    stats_text = (
-        "📊 *إحصائيات سوق السيارات*\n\n"
-        f"🚗 إجمالي السيارات: *{total}*\n\n"
-        "*توزيع الأسعار:*\n"
-        f"💵 أقل من 50M: {under_50} سيارة\n"
-        f"💰 أقل من 100M: {under_100} سيارة\n"
-        f"💎 أقل من 200M: {under_200} سيارة\n\n"
-        "📈 السوق نشط ومتجدد يومياً!"
-    )
+    under_10k = len([c for c in all_cars if c[5] < 10000])
+    under_20k = len([c for c in all_cars if c[5] < 20000])
+    under_30k = len([c for c in all_cars if c[5] < 30000])
     await update.message.reply_text(
-        stats_text,
-        reply_markup=main_menu_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'stats', total=total, under_10k=under_10k, under_20k=under_20k, under_30k=under_30k),
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
     )
 
+# Language menu
+async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    await update.message.reply_text(
+        t(user_id, 'choose_language'),
+        reply_markup=language_keyboard(),
+        parse_mode="HTML"
+    )
 
-# ----------- Add Car Flow -------------
+# Add car flow
 async def addcar_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start adding car process"""
+    user_id = update.message.from_user.id
     await update.message.reply_text(
-        "🚘 *خطوة 1 من 5*\n\n"
-        "أدخل موديل السيارة:\n"
-        "مثال: `Toyota Corolla` أو `Hyundai Elantra`",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'add_step1'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
     )
     return MODEL
 
-
 async def addcar_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
-    if text in ["❌ إلغاء", "🏠 القائمة الرئيسية"]:
+    if text.startswith("❌") or text.startswith("🏠"):
         return await cancel(update, context)
-
     context.user_data['model'] = text
+    user_id = update.message.from_user.id
     await update.message.reply_text(
-        "📅 *خطوة 2 من 5*\n\n"
-        "أدخل سنة الصنع:\n"
-        "مثال: `2020` أو `2018`",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'add_step2'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
     )
     return YEAR
 
-
 async def addcar_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
-    if text in ["❌ إلغاء", "🏠 القائمة الرئيسية"]:
+    user_id = update.message.from_user.id
+    if text.startswith("❌") or text.startswith("🏠"):
         return await cancel(update, context)
-
     if not text.isdigit() or len(text) != 4:
         await update.message.reply_text(
-            "⚠️ يرجى إدخال سنة صحيحة (4 أرقام)\n"
-            "مثال: `2020`",
-            reply_markup=cancel_keyboard(),
-            parse_mode="Markdown"
+            t(user_id, 'add_step2_invalid_format'),
+            reply_markup=cancel_keyboard(user_id),
+            parse_mode="HTML"
         )
         return YEAR
-
     year = int(text)
     if year < 1990 or year > 2025:
         await update.message.reply_text(
-            "⚠️ السنة يجب أن تكون بين 1990 و 2025",
-            reply_markup=cancel_keyboard()
+            t(user_id, 'add_step2_invalid_range'),
+            reply_markup=cancel_keyboard(user_id),
+            parse_mode="HTML"
         )
         return YEAR
-
     context.user_data['year'] = year
     await update.message.reply_text(
-        "💰 *خطوة 3 من 5*\n\n"
-        "أدخل السعر بالمليون دينار:\n"
-        "مثال: `45` (يعني 45 مليون)",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'add_step3'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
     )
     return PRICE
 
-
 async def addcar_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
-    if text in ["❌ إلغاء", "🏠 القائمة الرئيسية"]:
+    user_id = update.message.from_user.id
+    if text.startswith("❌") or text.startswith("🏠"):
         return await cancel(update, context)
-
     try:
         price = int(text)
         if price <= 0:
             raise ValueError
     except ValueError:
         await update.message.reply_text(
-            "⚠️ يرجى إدخال رقم صحيح للسعر\n"
-            "مثال: `45` أو `120`",
-            reply_markup=cancel_keyboard(),
-            parse_mode="Markdown"
+            t(user_id, 'add_step3_invalid'),
+            reply_markup=cancel_keyboard(user_id),
+            parse_mode="HTML"
         )
         return PRICE
-
     context.user_data['price'] = price
     await update.message.reply_text(
-        "📞 *خطوة 4 من 5*\n\n"
-        "أدخل رقم الهاتف:\n"
-        "مثال: `+213555123456` أو `0555123456`",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'add_step4'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
+    )
+    return MILES
+
+async def addcar_miles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    user_id = update.message.from_user.id
+    if text.startswith("❌") or text.startswith("🏠"):
+        return await cancel(update, context)
+    try:
+        miles = int(text)
+        if miles < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            t(user_id, 'add_step4_invalid'),
+            reply_markup=cancel_keyboard(user_id),
+            parse_mode="HTML"
+        )
+        return MILES
+    context.user_data['miles'] = miles
+    await update.message.reply_text(
+        t(user_id, 'add_step5'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
+    )
+    return LOCATION
+
+async def addcar_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    user_id = update.message.from_user.id
+    if text.startswith("❌") or text.startswith("🏠"):
+        return await cancel(update, context)
+    context.user_data['location'] = text
+    await update.message.reply_text(
+        t(user_id, 'add_step6'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
+    )
+    return CONDITION
+
+async def addcar_condition(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    user_id = update.message.from_user.id
+    if text.startswith("❌") or text.startswith("🏠"):
+        return await cancel(update, context)
+    try:
+        condition = int(text)
+        if not 1 <= condition <= 10:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            t(user_id, 'add_step6_invalid'),
+            reply_markup=cancel_keyboard(user_id),
+            parse_mode="HTML"
+        )
+        return CONDITION
+    context.user_data['condition'] = condition
+    await update.message.reply_text(
+        t(user_id, 'add_step7'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
     )
     return PHONE
 
-
 async def addcar_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
-    if text in ["❌ إلغاء", "🏠 القائمة الرئيسية"]:
+    user_id = update.message.from_user.id
+    if text.startswith("❌") or text.startswith("🏠"):
         return await cancel(update, context)
-
-    context.user_data['phone'] = text
+    digits = ''.join(filter(lambda x: x.isdigit() or x == '+', text))
+    context.user_data['phone'] = digits
     await update.message.reply_text(
-        "📸 *خطوة 5 من 5 (الأخيرة)*\n\n"
-        "أرسل صورة واضحة للسيارة:\n"
-        "• الصورة يجب أن تكون واضحة\n"
-        "• يفضل صورة من الخارج\n"
-        "• تجنب الصور المشوشة",
-        reply_markup=cancel_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'add_step8'),
+        reply_markup=cancel_keyboard(user_id),
+        parse_mode="HTML"
     )
     return IMAGE
 
-
 async def addcar_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
     if not update.message.photo:
         await update.message.reply_text(
-            "⚠️ لم أستلم صورة!\n"
-            "يرجى إرسال صورة واحدة من فضلك 📸"
+            t(user_id, 'add_image_invalid'),
+            parse_mode="HTML"
         )
         return IMAGE
-
     photo = update.message.photo[-1]
     file = await photo.get_file()
     file_path = os.path.join(IMAGES_DIR, f"{photo.file_id}.jpg")
     await file.download_to_drive(file_path)
-
     data = context.user_data
     user = update.message.from_user
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
-    
     car_id = add_car(
         user.id, username, data['model'], data['year'],
-        data['price'], data['phone'], file_path
+        data['price'], data['miles'], data['location'],
+        data['condition'], data['phone'], file_path
     )
-
     context.user_data.clear()
-    
-    success_msg = (
-        "✅ *تم نشر إعلانك بنجاح!*\n\n"
-        f"🆔 رقم الإعلان: `{car_id}`\n"
-        f"🚘 الموديل: {data['model']}\n"
-        f"📅 السنة: {data['year']}\n"
-        f"💰 السعر: {data['price']}M\n\n"
-        "🎉 إعلانك الآن ظاهر للجميع!\n"
-        "📱 سيتواصل معك المشترون قريباً"
-    )
-    
     await update.message.reply_text(
-        success_msg,
-        reply_markup=main_menu_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'add_success', car_id=car_id, model=data['model'], year=data['year'], price=data['price'], miles=data['miles'], location=data['location'], condition=data['condition'], phone=data['phone']),
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
     )
     return ConversationHandler.END
 
-
-# ----------- Cancel -------------
+# Cancel
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel current operation"""
+    user_id = update.message.from_user.id
     context.user_data.clear()
     await update.message.reply_text(
-        "❌ تم إلغاء العملية\n\n"
-        "🏠 عدت إلى القائمة الرئيسية",
-        reply_markup=main_menu_keyboard()
+        t(user_id, 'cancelled'),
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
     )
     return ConversationHandler.END
 
-
-# ----------- Explore -------------
+# Explore start
 async def explore_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start browsing cars"""
+    user_id = update.message.from_user.id
     await update.message.reply_text(
-        "🔍 *تصفح السيارات المتاحة*\n\n"
-        "اختر نطاق السعر المناسب لك:\n"
-        "💵 أقل من 50M\n"
-        "💰 أقل من 100M\n"
-        "💎 أقل من 200M\n"
-        "📋 كل السيارات المتاحة",
-        reply_markup=explore_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'explore'),
+        reply_markup=explore_keyboard(user_id),
+        parse_mode="HTML"
     )
 
-
+# Filter choice
 async def filter_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle filter selection"""
     text = update.message.text
-    
-    if "القائمة الرئيسية" in text:
+    user_id = update.message.from_user.id
+    if text.startswith("🏠"):
         await start(update, context)
         return
-
-    # Determine price filter
-    if "50" in text:
-        maxp = 50
-        filter_name = "أقل من 50 مليون"
-    elif "100" in text:
-        maxp = 100
-        filter_name = "أقل من 100 مليون"
-    elif "200" in text:
-        maxp = 200
-        filter_name = "أقل من 200 مليون"
+    if "10K" in text:
+        maxp = 10000
+        filter_name = t(user_id, 'under_10k')
+    elif "20K" in text:
+        maxp = 20000
+        filter_name = t(user_id, 'under_20k')
+    elif "30K" in text:
+        maxp = 30000
+        filter_name = t(user_id, 'under_30k')
     else:
-        maxp = 10**9
-        filter_name = "كل السيارات"
-
+        maxp = 1000000
+        filter_name = t(user_id, 'all_cars')
     cars = get_cars_under_price(maxp, limit=30)
-    
     if not cars:
         await update.message.reply_text(
-            f"🚫 *لا توجد سيارات متاحة*\n\n"
-            f"الفلتر: {filter_name}\n"
-            f"جرب فلتر آخر أو أضف سيارتك للبيع! 🚗",
-            reply_markup=explore_keyboard(),
-            parse_mode="Markdown"
+            t(user_id, 'no_cars', filter_name=filter_name),
+            reply_markup=explore_keyboard(user_id),
+            parse_mode="HTML"
         )
         return
-
-    # Send header message
     await update.message.reply_text(
-        f"🔍 *نتائج البحث: {filter_name}*\n"
-        f"📊 عدد النتائج: {len(cars)} سيارة\n\n"
-        f"⬇️ جاري عرض السيارات...",
-        parse_mode="Markdown"
+        t(user_id, 'results_header', filter_name=filter_name, count=len(cars)),
+        parse_mode="HTML"
     )
-
-    # Send each car
     for car in cars:
-        car_id, user_id, username, model, year, price, phone, image_path, created_at = car
-        
-        caption = (
-           
-            f"🚘 *{model}*\n"
-            f"📅 السنة: {year}\n"
-            f"💰 السعر: {price} مليون \n"
-            f"📞 الهاتف: `{phone}`\n"
-            f"🕐 النشر: {created_at}\n\n"
-            f"💡 انسخ رقم الهاتف أعلاه واتصل مباشرة"
-        )
-        
+        caption = format_car_caption(car, user_id)
         buttons = [
-            [InlineKeyboardButton("📞 انسخ رقم الهاتف", callback_data=f"COPY_{car_id}_{phone}")]
+            [
+                InlineKeyboardButton(t(user_id, 'copy_phone'), callback_data=f"COPY_{car[0]}_{car[9]}"),
+                InlineKeyboardButton(t(user_id, 'message_seller'), url=f"tg://user?id={car[1]}")
+            ]
         ]
         reply_markup = InlineKeyboardMarkup(buttons)
-        
+        image_path = car[10]
         if image_path and os.path.exists(image_path):
             with open(image_path, 'rb') as img:
                 await update.message.reply_photo(
                     photo=img,
                     caption=caption,
                     reply_markup=reply_markup,
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
         else:
             await update.message.reply_text(
                 caption,
                 reply_markup=reply_markup,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
-
-    # Send footer with navigation
     await update.message.reply_text(
-        "✅ *انتهى عرض النتائج*\n\n"
-        "اختر سيارة أخرى أو عد للقائمة الرئيسية 🏠",
-        reply_markup=explore_keyboard(),
-        parse_mode="Markdown"
+        t(user_id, 'end_results'),
+        reply_markup=explore_keyboard(user_id),
+        parse_mode="HTML"
     )
 
+# My cars
+async def my_cars(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    cars = get_user_cars(user_id)
+    if not cars:
+        await update.message.reply_text(
+            t(user_id, 'no_listings'),
+            reply_markup=main_menu_keyboard(user_id),
+            parse_mode="HTML"
+        )
+        return
+    await update.message.reply_text(
+        t(user_id, 'my_cars_header', count=len(cars)),
+        parse_mode="HTML"
+    )
+    for car in cars:
+        caption = format_car_caption(car, user_id, is_my_car=True)
+        buttons = [
+            [
+                InlineKeyboardButton(t(user_id, 'delete'), callback_data=f"CONFIRM_{car[0]}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        image_path = car[10]
+        if image_path and os.path.exists(image_path):
+            with open(image_path, 'rb') as img:
+                await update.message.reply_photo(
+                    photo=img,
+                    caption=caption,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+        else:
+            await update.message.reply_text(
+                caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+    await update.message.reply_text(
+        t(user_id, 'my_cars_end'),
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
+    )
 
-# ----------- Detail View -------------
+# Button handler
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button clicks"""
     query = update.callback_query
     await query.answer()
     data = query.data
-
+    user_id = query.from_user.id
+    if data.startswith("LANG_"):
+        lang = data.split("_")[1]
+        set_user_language(user_id, lang)
+        await query.edit_message_text(
+            t(user_id, 'language_changed', lang=lang.upper()),
+            parse_mode="HTML"
+        )
+        await query.message.reply_text(
+            t(user_id, 'welcome'),
+            reply_markup=main_menu_keyboard(user_id),
+            parse_mode="HTML"
+        )
+        return
     if data.startswith("COPY_"):
-        # Extract phone number from callback data
         parts = data.split("_", 2)
         if len(parts) >= 3:
             phone = parts[2]
             await query.answer(
-                f"📞 رقم الهاتف: {phone}\nانسخه واتصل الآن!",
+                t(user_id, 'phone_copied', phone=phone),
                 show_alert=True
             )
         return
-
-    if data.startswith("DETAIL_"):
-        car_id = int(data.split("_", 1)[1])
-        car = get_car_by_id(car_id)
-        
-        if not car:
-            await query.edit_message_caption(
-                caption="🚫 *عذراً، هذا الإعلان لم يعد متاحاً*",
-                parse_mode="Markdown"
-            )
-            return
-
-        _, user_id, username, model, year, price, phone, image_path, created_at = car
-        
-        detail_text = (
-          
-            f"🚗 *تفاصيل السيارة:*\n"
-            f"   • الموديل: *{model}*\n"
-            f"   • سنة الصنع: {year}\n"
-            f"   • السعر: {price} مليون دينار جزائري\n\n"
-            f"👤 *معلومات البائع:*\n"
-            f"   • الاسم: @{username if username else 'مستخدم'}\n"
-            f"   • رقم الهاتف: `{phone}`\n\n"
-            f"📅 *تاريخ النشر:* {created_at}\n\n"
-            f"{'='*30}\n"
-            f"📞 *للاتصال:* اضغط على رقم الهاتف أعلاه للنسخ،\n"
-            f"ثم اتصل مباشرة بالبائع عبر الهاتف\n\n"
-            f"أو أرسل رسالة للبائع عبر تيليجرام 👇"
-        )
-        
-        buttons = [
-            [InlineKeyboardButton("✉️ مراسلة البائع عبر تيليجرام", url=f"tg://user?id={user_id}")]
+    if data.startswith("CONFIRM_"):
+        car_id = int(data.split("_")[1])
+        new_buttons = [
+            [
+                InlineKeyboardButton(t(user_id, 'yes_delete'), callback_data=f"YES_DELETE_{car_id}"),
+                InlineKeyboardButton(t(user_id, 'no_delete'), callback_data="NO_DELETE")
+            ]
         ]
-        reply_markup = InlineKeyboardMarkup(buttons)
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_buttons))
+        return
+    if data == "NO_DELETE":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.answer(t(user_id, 'deletion_cancelled'))
+        return
+    if data.startswith("YES_DELETE_"):
+        car_id = int(data.split("_")[2])
+        deleted = delete_car(car_id, user_id)
+        if deleted:
+            await query.edit_message_caption(
+                caption=t(user_id, 'listing_deleted_caption'),
+                parse_mode="HTML"
+            )
+            await query.answer(t(user_id, 'listing_deleted'))
+        else:
+            await query.answer(t(user_id, 'delete_failed'), show_alert=True)
+        return
 
-        await query.message.reply_text(
-            detail_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-
-
-# ----------- Main Menu Handler -------------
+# Main menu handler
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle main menu button presses"""
     text = update.message.text
-    
-    if "أضف سيارة" in text:
+    if text.startswith("🚗"):
         await addcar_start(update, context)
-    elif "تصفح السيارات" in text:
+    elif text.startswith("🔍"):
         await explore_start(update, context)
-    elif "إحصائيات" in text:
+    elif text.startswith("🗂️"):
+        await my_cars(update, context)
+    elif text.startswith("📊"):
         await stats_command(update, context)
-    elif "مساعدة" in text:
+    elif text.startswith("ℹ️"):
         await help_command(update, context)
+    elif text.startswith("🌐"):
+        await language_menu(update, context)
 
-
-# ----------- Main -------------
+# Main function
 def main():
-    """Initialize and start the bot"""
     init_db()
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Conversation handler for adding cars
     conv = ConversationHandler(
         entry_points=[
             CommandHandler('addcar', addcar_start),
-            MessageHandler(filters.Regex("🚗 أضف سيارة"), addcar_start)
+            MessageHandler(filters.Regex(r"^🚗"), addcar_start)
         ],
         states={
             MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_model)],
             YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_year)],
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_price)],
+            MILES: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_miles)],
+            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_location)],
+            CONDITION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_condition)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcar_phone)],
             IMAGE: [MessageHandler(filters.PHOTO, addcar_image)],
         },
         fallbacks=[
-            MessageHandler(filters.Regex("❌ إلغاء|🏠 القائمة الرئيسية"), cancel),
-            CommandHandler('cancel', cancel)
+            CommandHandler('cancel', cancel),
+            MessageHandler(filters.Regex(r"^❌|^🏠"), cancel)
         ]
     )
 
-    # Command handlers
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('help', help_command))
     app.add_handler(CommandHandler('stats', stats_command))
     app.add_handler(CommandHandler('explore', explore_start))
+    app.add_handler(CommandHandler('mycars', my_cars))
+    app.add_handler(CommandHandler('lang', language_menu))
     app.add_handler(CommandHandler('cancel', cancel))
-    
-    # Conversation handler
+
     app.add_handler(conv)
-    
-    # Menu handlers
-    app.add_handler(MessageHandler(filters.Regex("🔍 تصفح السيارات"), explore_start))
-    app.add_handler(MessageHandler(filters.Regex("📊 إحصائيات"), stats_command))
-    app.add_handler(MessageHandler(filters.Regex("ℹ️ مساعدة"), help_command))
-    app.add_handler(MessageHandler(
-        filters.Regex(r'أقل من|كل السيارات|القائمة الرئيسية'),
-        filter_choice
-    ))
-    
-    # Callback query handler
+
+    app.add_handler(MessageHandler(filters.Regex(r"^🔍"), explore_start))
+    app.add_handler(MessageHandler(filters.Regex(r"^🗂️"), my_cars))
+    app.add_handler(MessageHandler(filters.Regex(r"^📊"), stats_command))
+    app.add_handler(MessageHandler(filters.Regex(r"^ℹ️"), help_command))
+    app.add_handler(MessageHandler(filters.Regex(r"^🌐"), language_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"Under|أقل من|Moins de|All Cars|جميع|Toutes les|Main Menu|القائمة|Menu"), filter_choice))
+
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("🚀 Car Market Bot started successfully!")
+    logger.info("🚀 Car Marketplace Bot started!")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
