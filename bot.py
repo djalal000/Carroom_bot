@@ -78,10 +78,36 @@ def language_keyboard():
         ]
     ])
 
-# Format car caption
+# Format car caption with robust type handling
 def format_car_caption(car, user_id, is_my_car=False):
-    car_id, _, username, model, year, price, miles, location, condition, phone, _, created_at = car
+    # Handle both tuple and Row objects from SQLite
+    if hasattr(car, 'keys'):  # sqlite3.Row object
+        car_id = car['id']
+        username = car['username']
+        model = car['model']
+        year = car['year']
+        price = car['price']
+        miles = car['miles']
+        location = car['location']
+        condition = car['condition']
+        phone = car['phone']
+        image_path = car['image_path']
+        created_at = car['created_at']
+    else:  # Tuple
+        car_id, _, username, model, year, price, miles, location, condition, phone, image_path, created_at = car
+    
     keys = LANGS[get_user_language(user_id)]
+    
+    # Convert to integers to ensure proper formatting
+    try:
+        year = int(year)
+        price = int(price)
+        miles = int(miles)
+        condition = int(condition)
+    except (ValueError, TypeError) as e:
+        # Log the error for debugging
+        print(f"Type conversion error: {e}, types: year={type(year)}, price={type(price)}, miles={type(miles)}")
+    
     caption = (
         f"<b>🚘 {model}</b>\n"
         f"<b>{keys['year_label']}</b> {year}\n"
