@@ -27,11 +27,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_2 }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3️⃣ Log in to Amazon ECR
+      # 3️⃣ Log in to ECR
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4️⃣ Set IMAGE_TAG from latest commit SHA
+      # 4️⃣ Set IMAGE_TAG (unique tag from commit)
       - name: Set IMAGE_TAG
         run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
@@ -43,60 +43,43 @@ jobs:
 
       # 6️⃣ Push Docker image to ECR
       - name: Push Docker image
+        run: docker push $ECR_REPOSITORY:${{ env.IMAGE_TAG }}
+
+      # 7️⃣ Register new ECS task definition revision
+      - name: Register new ECS task definition
+        id: register-task
         run: |
-          docker push $ECR_REPOSITORY:${{ env.IMAGE_TAG }}
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition telegram-bot-task \
+            --query taskDefinition)
+          
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | \
+            jq --arg IMAGE "$ECR_REPOSITORY:${{ env.IMAGE_TAG }}" \
+            '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+          
+          echo "$NEW_TASK_DEF" > new-task-def.json
+          aws ecs register-task-definition --cli-input-json file://new-task-def.json
+          
+          echo "TASK_FAMILY=$(echo $NEW_TASK_DEF | jq -r '.family')" >> $GITHUB_ENV
 
-      # 7️⃣ Scan image with Trivy
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.21.0
-        with:
-          image-ref: ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          format: table
-          exit-code: 0
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-
-      # 8️⃣ Create ECS task definition (no port mapping)
-      - name: Create ECS task definition
-        id: taskdef
+      # 8️⃣ Deploy new task definition
+      - name: Update ECS service with new task definition
         run: |
-          echo '{
-            "family": "telegram-bot-task",
-            "networkMode": "awsvpc",
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": "256",
-            "memory": "1024",
-            "executionRoleArn": "arn:aws:iam::813010034876:role/ecsTaskExecutionRole",
-            "containerDefinitions": [
-              {
-                "name": "telegram-bot",
-                "image": "'$ECR_REPOSITORY':${{ env.IMAGE_TAG }}",
-                "essential": true,
-                "environmentFiles": [
-                  {
-                    "value": "arn:aws:s3:::telegram-bot-env/.env",
-                    "type": "s3"
-                  }
-                ],
-                "logConfiguration": {
-                  "logDriver": "awslogs",
-                  "options": {
-                    "awslogs-group": "/ecs/telegram-bot",
-                    "awslogs-region": "us-east-1",
-                    "awslogs-stream-prefix": "ecs"
-                  }
-                }
-              }
-            ]
-          }' > task-def.json
+          LATEST_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition ${{ env.TASK_FAMILY }} \
+            --query "taskDefinition.revision" --output text)
+          
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition ${TASK_FAMILY}:${LATEST_TASK_DEF} \
+            --force-new-deployment
 
-      # 9️⃣ Deploy to ECS (force new deployment, don't wait for HTTP health)
-      - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: task-def.json
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: false
-          force-new-deployment: true
+      # 9️⃣ Wait until new service is stable
+      - name: Wait for ECS service to stabilize
+        run: |
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE
+          echo "✅ Deployment complete!"
