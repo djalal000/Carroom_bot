@@ -3,6 +3,7 @@ name: Deploy Telegram Bot to AWS ECS
 on:
   push:
     branches: [ main ]
+  workflow_dispatch: # optional manual trigger
 
 env:
   AWS_REGION: us-east-1
@@ -15,9 +16,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ---------------------------
+      # 1️⃣ Checkout repository
+      # ---------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ---------------------------
+      # 2️⃣ Configure AWS credentials
+      # ---------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -25,29 +32,48 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_2 }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # ---------------------------
+      # 3️⃣ Login to Amazon ECR
+      # ---------------------------
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # ---------------------------
+      # 4️⃣ Build and tag Docker image (unique tag)
+      # ---------------------------
       - name: Build Docker image
         run: |
-          docker build -t telegram-bot .
-          docker tag telegram-bot:latest $ECR_REPOSITORY:latest
+          IMAGE_TAG=${GITHUB_SHA::7}   # first 7 chars of commit SHA
+          docker build -t telegram-bot:$IMAGE_TAG .
+          docker tag telegram-bot:$IMAGE_TAG $ECR_REPOSITORY:$IMAGE_TAG
+          docker tag telegram-bot:$IMAGE_TAG $ECR_REPOSITORY:latest
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
+      # ---------------------------
+      # 5️⃣ Push Docker image to ECR
+      # ---------------------------
       - name: Push Docker image to ECR
         run: |
+          docker push $ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REPOSITORY:latest
 
+      # ---------------------------
+      # 6️⃣ Scan image with Trivy
+      # ---------------------------
       - name: Scan image for vulnerabilities with Trivy
         uses: aquasecurity/trivy-action@0.21.0
         with:
-          image-ref: ${{ env.ECR_REPOSITORY }}:latest
+          image-ref: ${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
           format: table
           exit-code: 0
           ignore-unfixed: true
           vuln-type: os,library
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
+      # ---------------------------
+      # 7️⃣ Create ECS task definition dynamically
+      # ---------------------------
       - name: Create ECS task definition
         id: taskdef
         run: |
@@ -61,7 +87,7 @@ jobs:
             "containerDefinitions": [
               {
                 "name": "telegram-bot",
-                "image": "'$ECR_REPOSITORY':latest",
+                "image": "'$ECR_REPOSITORY':'$IMAGE_TAG'",
                 "essential": true,
                 "portMappings": [
                   {
@@ -88,6 +114,9 @@ jobs:
             ]
           }' > task-def.json
 
+      # ---------------------------
+      # 8️⃣ Deploy new Task Definition to ECS
+      # ---------------------------
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
