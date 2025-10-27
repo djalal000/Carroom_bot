@@ -129,7 +129,7 @@ async def post_init(application: Application):
         BotCommand("explore", "🔍 Browse Cars"),
         BotCommand("mycars", "🗂️ Manage My Cars"),
         BotCommand("stats", "📊 Market Stats"),
-        BotCommand("help", "ℹ️ Help & Support"),
+        BotCommand("help", "ℹ️  Support"),
         BotCommand("lang", "🌐 Change Language"),
         BotCommand("cancel", "❌ Cancel Current Operation")
     ]
