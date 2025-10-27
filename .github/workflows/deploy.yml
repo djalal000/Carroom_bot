@@ -13,12 +13,16 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # needed for OIDC auth (optional if using keys)
+
     steps:
-      # 1. Checkout code
-      - name: Checkout
+      # 1. Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Configure AWS credentials
+      # 2. Configure AWS credentials (access-key or OIDC)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -30,11 +34,11 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4. Set image tag (short commit SHA)
+      # 4. Image tag = short commit SHA
       - name: Set IMAGE_TAG
         run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      # 5. Build and tag Docker image
+      # 5. Build & tag
       - name: Build Docker image
         run: |
           docker build -t telegram-bot .
@@ -47,10 +51,10 @@ jobs:
           docker push ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
           docker push ${{ env.ECR_REPOSITORY }}:latest
 
-      # 7. Create task definition JSON with unique env var to force new revision
+      # 7. Generate task-definition JSON (unique env vars → new revision)
       - name: Generate task definition
         run: |
-          cat > task-def.json << EOF
+          cat > task-def.json <<'EOF'
           {
             "family": "${{ env.TASK_FAMILY }}",
             "networkMode": "awsvpc",
@@ -64,20 +68,11 @@ jobs:
                 "image": "${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}",
                 "essential": true,
                 "environment": [
-                  {
-                    "name": "GIT_COMMIT",
-                    "value": "${{ env.IMAGE_TAG }}"
-                  },
-                  {
-                    "name": "DEPLOYED_AT",
-                    "value": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-                  }
+                  { "name": "GIT_COMMIT", "value": "${{ env.IMAGE_TAG }}" },
+                  { "name": "DEPLOYED_AT", "value": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" }
                 ],
                 "environmentFiles": [
-                  {
-                    "value": "arn:aws:s3:::telegram-bot-env/.env",
-                    "type": "s3"
-                  }
+                  { "value": "arn:aws:s3:::telegram-bot-env/.env", "type": "s3" }
                 ],
                 "logConfiguration": {
                   "logDriver": "awslogs",
@@ -92,14 +87,14 @@ jobs:
           }
           EOF
 
-      # 8. Register new task definition (guarantees new revision)
+      # 8. Register a NEW task-definition revision
       - name: Register ECS task definition
         id: task-def
-        uses: aws-actions/amazon-ecs-register-task-definition@v1
+        uses: aws-actions/amazon-ecs-register-task-definition@v1   # correct name
         with:
           task-definition: task-def.json
 
-      # 9. Deploy to ECS with force new deployment
+      # 9. Deploy (force new deployment)
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
