@@ -99,11 +99,12 @@ jobs:
             ]
           }' > task-def.json
 
-      # 9️⃣ Deploy to ECS
+      # 9️⃣ Deploy to ECS (force new deployment)
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
           task-definition: task-def.json
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: false
+          wait-for-service-stability: true
+          force-new-deployment: true
