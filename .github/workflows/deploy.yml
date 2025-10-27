@@ -29,10 +29,9 @@ jobs:
 
       # 3️⃣ Log in to Amazon ECR
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4️⃣ Set IMAGE_TAG environment variable from git commit SHA
+      # 4️⃣ Set IMAGE_TAG from latest commit SHA
       - name: Set IMAGE_TAG
         run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
@@ -43,11 +42,11 @@ jobs:
           docker tag telegram-bot:latest $ECR_REPOSITORY:${{ env.IMAGE_TAG }}
 
       # 6️⃣ Push Docker image to ECR
-      - name: Push Docker image to ECR
+      - name: Push Docker image
         run: |
           docker push $ECR_REPOSITORY:${{ env.IMAGE_TAG }}
 
-      # 7️⃣ Scan image for vulnerabilities with Trivy
+      # 7️⃣ Scan image with Trivy
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.21.0
         with:
@@ -58,7 +57,7 @@ jobs:
           vuln-type: os,library
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
-      # 8️⃣ Create ECS task definition
+      # 8️⃣ Create ECS task definition (no port mapping)
       - name: Create ECS task definition
         id: taskdef
         run: |
@@ -67,20 +66,13 @@ jobs:
             "networkMode": "awsvpc",
             "requiresCompatibilities": ["FARGATE"],
             "cpu": "256",
-            "memory": "512",
+            "memory": "1024",
             "executionRoleArn": "arn:aws:iam::813010034876:role/ecsTaskExecutionRole",
             "containerDefinitions": [
               {
                 "name": "telegram-bot",
                 "image": "'$ECR_REPOSITORY':${{ env.IMAGE_TAG }}",
                 "essential": true,
-                "portMappings": [
-                  {
-                    "containerPort": 80,
-                    "hostPort": 80,
-                    "protocol": "tcp"
-                  }
-                ],
                 "environmentFiles": [
                   {
                     "value": "arn:aws:s3:::telegram-bot-env/.env",
@@ -99,7 +91,7 @@ jobs:
             ]
           }' > task-def.json
 
-      # 9️⃣ Deploy to ECS (force new deployment)
+      # 9️⃣ Deploy to ECS (force new deployment, don't wait for HTTP health)
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
