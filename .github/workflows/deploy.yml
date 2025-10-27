@@ -35,10 +35,10 @@ jobs:
       - name: Set IMAGE_TAG
         run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      # 5️⃣ Build Docker image
-      - name: Build Docker image
+      # 5️⃣ Build Docker image (no cache)
+      - name: Build Docker image (no cache)
         run: |
-          docker build -t telegram-bot .
+          docker build --no-cache -t telegram-bot .
           docker tag telegram-bot:latest $ECR_REPOSITORY:${{ env.IMAGE_TAG }}
 
       # 6️⃣ Push Docker image to ECR
