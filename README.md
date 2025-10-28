@@ -1,152 +1,147 @@
-
 <img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/94b3d976-9612-4524-a796-345419cd837b" />
 
+Hey! This is a little project I put together to spin up a **Telegram bot** on AWS without clicking around in the console all day. It uses **Terraform** to create everything, **Fargate** to run the bot in Docker, and **ECR** to store the images. I also threw in a **GitHub Actions CI/CD pipeline** so every time I push code, it builds, scans, and deploys automatically.
 
 
 
-This project provides an automated infrastructure setup for deploying a Python-based Telegram bot on AWS using Terraform, 
-rgate, and ECR. It includes a CI/CD workflow to build, scan, and deploy Docker images.
+What’s in the setup?
+
+Here’s the gist of what gets created:
+
+- **VPC** with **public subnets** (so the bot can talk to Telegram)
+- **ECR repo** to hold the Docker images (with auto-scanning on push)
+- **ECS Cluster on Fargate** – runs the bot container, no servers to manage
+- **IAM roles** so ECS can pull images and write logs
+- **Security Group** – only allows what’s needed (port 80 inbound for now)
+- **CloudWatch Logs** – see what the bot is doing in real time
+
+Push new code → GitHub builds & pushes image → ECS pulls the latest → bot updates. Zero manual steps.
+
+
+ Terraform Resources (the important bits)
+
+1. **AWS Provider**  
+   Just points to the region you set.
+
+2. **ECR Repository**  
+   Stores the Docker image. `scan_on_push = true` so AWS flags any vulnerabilities.
+
+3. **Networking**  
+   - VPC (your private network bubble)  
+   - Public subnets (for Fargate tasks)  
+   - Internet Gateway + Route Table → internet access
+
+4. **Security**  
+   - Security Group: allows HTTP (port 80) inbound  
+   - IAM Role: gives ECS permission to pull from ECR and push logs
+
+5. **ECS Stuff**  
+   - Cluster → groups tasks  
+   - Task Definition → says “run this Docker image”  
+   - Service → keeps one task running and restarts if it dies
+
+6. **Logging**  
+   CloudWatch Log Group catches all `print()` and error output from the container.
+
+
+## How to deploy it (step-by-step)
+
+### 1. Set your variables
+Edit `variables.tf` (or pass via CLI):
+
+```hcl
+variable "aws_region" { default = "us-east-1" }
+variable "project_name" { default = "telegram-bot" }
+variable "environment" { default = "prod" }
+variable "vpc_cidr" { default = "10.0.0.0/16" }
+```
+
+ 2. Initialize Terraform
+```bash
+terraform init
+```
+
+3. See what’ll be created
+```bash
+terraform plan
+```
+
+ 4. Build the infra
+```bash
+terraform apply
+```
+
+ 5. Build & push your Docker image
+```bash
+# Build
+docker build -t my-telegram-bot:latest .
+
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com
+
+# Tag & push
+docker tag my-telegram-bot:latest 123456789012.dkr.ecr.us-east-1.amazonaws.com/my-telegram-bot:latest
+docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/my-telegram-bot:latest
+```
+
+> ECS will auto-pull the `latest` tag if your task def uses it. You can also update the task def via Terraform.
 
 ---
 
-## 🏗️ Project Overview
+ Security & Good Stuff
 
-The infrastructure consists of:
-
-- **AWS VPC** with public subnets
-- **ECR Repository** for Docker images
-- **ECS Cluster (Fargate)** to run the Telegram bot container
-- **IAM Roles** for ECS task execution
-- **Security Groups** to manage access
-- **CloudWatch Logs** for monitoring container logs
-
-The setup allows the bot to be updated automatically whenever code changes are pushed to GitHub.
-
-
-
-⚙️ Terraform Resources
-
- 1. Provider Configuration
-- AWS provider configured using the region variable
-
- 2. ECR Repository
-- Stores Docker images
-- Enabled `scan_on_push` for vulnerability scanning
-
- 3. Networking
-- **VPC**: isolated network for resources
-- **Subnets**: public subnets for ECS tasks
-- **Internet Gateway**: allows outbound/inbound Internet access
-- **Route Table**: routes traffic to IGW
-
- 4. Security
-- Security Group: allows inbound HTTP traffic on port 80
-- IAM Role: ECS execution role with proper permissions
-
- 5. ECS Cluster & Tasks
-- **Cluster**: groups ECS tasks
-- **Task Definition**: specifies Docker container configuration
-- **Service**: ensures task is running and healthy
-
- 6. Logging
-- CloudWatch Log Group for container logs
+- **Bot token?** → Store it in **AWS Secrets Manager**, not in code or env files.
+- **Scanning:** ECR scans on push. I also use **Trivy** in CI.
+- **Want tighter security?** Move Fargate tasks to **private subnets** + NAT Gateway.
 
 ---
 
- 🚀 Deployment Steps
+Monitoring
 
-1. **Configure Variables**
-   Update `variables.tf` with:
-   ```hcl
-   variable "aws_region" {}
-   variable "project_name" {}
-   variable "environment" {}
-   variable "vpc_cidr" {}
-````
+- All logs go to **CloudWatch** – just search your log group.
+- Set up **alarms** for:
+  - Task crashes
+  - High CPU/memory
+  - No healthy tasks
 
-2. **Initialize Terraform**
+---
 
-   ```bash
-   terraform init
-   ```
+ CI/CD with GitHub Actions
 
-3. **Plan Infrastructure**
+I have a workflow that:
+1. Builds the Docker image
+2. Scans it with **Trivy**
+3. Pushes to ECR
+4. Runs `terraform apply` to update ECS
 
-   ```bash
-   terraform plan
-   ```
+→ Push to `main` → bot updates in ~2 minutes.
 
-4. **Apply Infrastructure**
+---
 
-   ```bash
-   terraform apply
-   ```
+ Diagram (text version)
 
-5. **Build and Push Docker Image**
-
-
-   docker build -t <your-ecr-repo>:latest .
-   aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account_id>.dkr.ecr.<region>.amazonaws.com
-   docker tag <your-image>:latest <account_id>.dkr.ecr.<region>.amazonaws.com/<your-ecr-repo>:latest
-   docker push <account_id>.dkr.ecr.<region>.amazonaws.com/<your-ecr-repo>:latest
-
-
-6. **Update ECS Service**
-
-   * ECS service automatically pulls the latest image if configured with the same task definition
-   * Optionally, update task definition and apply with Terraform
-
-
-
-## 🔒 Security & Best Practices
-
-* **Secrets**: Store Telegram bot token in AWS Secrets Manager
-* **Vulnerability Scanning**: Enable Trivy or ECR scan on push
-* **Private Subnets**: Move ECS tasks to private subnets with NAT Gateway for enhanced security
-
-
- 📊 Monitoring
-
-* CloudWatch Logs will capture all container logs
-* Set up CloudWatch Alarms for task failures or high CPU/memory usage
-
-
-## ⚡ CI/CD Integration
-
-* **GitHub Actions**:
-
-  * Build Docker image
-  * Scan with Trivy
-  * Push to ECR
-  * Deploy using Terraform
-* Automates updates whenever code is pushed to the repository
-
-## 🖼️ Diagram
-
-
-[Internet] 
+```
+[Internet]
    ↓
 [Internet Gateway]
    ↓
 [Route Table]
    ↓
 [Public Subnet]
-   ├─ ECS Fargate Task (Telegram Bot)
-   └─ Security Group
-[ECS Task] → [ECR] (pull image)
-[ECS Task] → [CloudWatch] (logs)
+   ├─ ECS Fargate Task → runs Telegram Bot
+   └─ Security Group (port 80 in)
+   
+[ECS Task] → pulls image from [ECR]
+[ECS Task] → sends logs to [CloudWatch]
 ```
 
+---
 
+ Future Ideas
 
-## 📦 Future Enhancements
+- [ ] Move tasks to **private subnets + NAT**
+- [ ] Add **ALB** for clean webhook URLs
+- [ ] Use **DynamoDB** or **RDS** if the bot needs to remember stuff
+- [ ] Full Terraform in CI/CD (already half-done)
 
-* Move ECS tasks to private subnets for better security
-* Add Application Load Balancer (ALB) for webhook routing
-* Integrate RDS or DynamoDB for persistent bot data
-* Automated Terraform with GitHub Actions for full CI/CD
-
-```
-
-This README explains your **current Terraform structure**, **services used**, and **deployment workflow**, while giving clear guidance for CI/CD, security, and future improvements.
-```
+linkedin : https://www.linkedin.com/in/bekhti-djalal/
