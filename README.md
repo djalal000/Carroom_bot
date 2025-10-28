@@ -1,10 +1,7 @@
-Here’s a complete `README.md` tailored to your Terraform setup for deploying a Python Telegram bot on AWS:
 
 <img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/94b3d976-9612-4524-a796-345419cd837b" />
 
 
-````markdown
-# Telegram Bot Deployment on AWS using Terraform<img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/8cdf793f-82b4-4fd1-b8fc-0594ee1926e8" />
 
 
 This project provides an automated infrastructure setup for deploying a Python-based Telegram bot on AWS using Terraform, ECS Fa<img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/aa5881a4-283a-4f88-ae6a-625ae2d4339a" />
