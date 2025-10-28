@@ -4,7 +4,7 @@
 
 
 
-This project provides an automated infrastructure setup for deploying a Python-based Telegram bot on AWS using Terraform, ECS Fa<img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/aa5881a4-283a-4f88-ae6a-625ae2d4339a" />
+This project provides an automated infrastructure setup for deploying a Python-based Telegram bot on AWS using Terraform, 
 rgate, and ECR. It includes a CI/CD workflow to build, scan, and deploy Docker images.
 
 ---
@@ -22,38 +22,38 @@ The infrastructure consists of:
 
 The setup allows the bot to be updated automatically whenever code changes are pushed to GitHub.
 
----
 
-## ⚙️ Terraform Resources
 
-### 1. Provider Configuration
+⚙️ Terraform Resources
+
+ 1. Provider Configuration
 - AWS provider configured using the region variable
 
-### 2. ECR Repository
+ 2. ECR Repository
 - Stores Docker images
 - Enabled `scan_on_push` for vulnerability scanning
 
-### 3. Networking
+ 3. Networking
 - **VPC**: isolated network for resources
 - **Subnets**: public subnets for ECS tasks
 - **Internet Gateway**: allows outbound/inbound Internet access
 - **Route Table**: routes traffic to IGW
 
-### 4. Security
+ 4. Security
 - Security Group: allows inbound HTTP traffic on port 80
 - IAM Role: ECS execution role with proper permissions
 
-### 5. ECS Cluster & Tasks
+ 5. ECS Cluster & Tasks
 - **Cluster**: groups ECS tasks
 - **Task Definition**: specifies Docker container configuration
 - **Service**: ensures task is running and healthy
 
-### 6. Logging
+ 6. Logging
 - CloudWatch Log Group for container logs
 
 ---
 
-## 🚀 Deployment Steps
+ 🚀 Deployment Steps
 
 1. **Configure Variables**
    Update `variables.tf` with:
@@ -84,19 +84,19 @@ The setup allows the bot to be updated automatically whenever code changes are p
 
 5. **Build and Push Docker Image**
 
-   ```bash
+
    docker build -t <your-ecr-repo>:latest .
    aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account_id>.dkr.ecr.<region>.amazonaws.com
    docker tag <your-image>:latest <account_id>.dkr.ecr.<region>.amazonaws.com/<your-ecr-repo>:latest
    docker push <account_id>.dkr.ecr.<region>.amazonaws.com/<your-ecr-repo>:latest
-   ```
+
 
 6. **Update ECS Service**
 
    * ECS service automatically pulls the latest image if configured with the same task definition
    * Optionally, update task definition and apply with Terraform
 
----
+
 
 ## 🔒 Security & Best Practices
 
@@ -104,14 +104,12 @@ The setup allows the bot to be updated automatically whenever code changes are p
 * **Vulnerability Scanning**: Enable Trivy or ECR scan on push
 * **Private Subnets**: Move ECS tasks to private subnets with NAT Gateway for enhanced security
 
----
 
-## 📊 Monitoring
+ 📊 Monitoring
 
 * CloudWatch Logs will capture all container logs
 * Set up CloudWatch Alarms for task failures or high CPU/memory usage
 
----
 
 ## ⚡ CI/CD Integration
 
@@ -123,11 +121,9 @@ The setup allows the bot to be updated automatically whenever code changes are p
   * Deploy using Terraform
 * Automates updates whenever code is pushed to the repository
 
----
-
 ## 🖼️ Diagram
 
-```
+
 [Internet] 
    ↓
 [Internet Gateway]
@@ -141,7 +137,7 @@ The setup allows the bot to be updated automatically whenever code changes are p
 [ECS Task] → [CloudWatch] (logs)
 ```
 
----
+
 
 ## 📦 Future Enhancements
 
