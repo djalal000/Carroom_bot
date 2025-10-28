@@ -1,138 +1,159 @@
-# 🚗 Car Marketplace Bot
-**Multilingual Telegram Bot for Buying & Selling Cars**
+Here’s a complete `README.md` tailored to your Terraform setup for deploying a Python Telegram bot on AWS:
+
+<img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/94b3d976-9612-4524-a796-345419cd837b" />
+
+
+````markdown
+# Telegram Bot Deployment on AWS using Terraform<img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/8cdf793f-82b4-4fd1-b8fc-0594ee1926e8" />
+
+
+This project provides an automated infrastructure setup for deploying a Python-based Telegram bot on AWS using Terraform, ECS Fa<img width="2660" height="1884" alt="Blank diagram" src="https://github.com/user-attachments/assets/aa5881a4-283a-4f88-ae6a-625ae2d4339a" />
+rgate, and ECR. It includes a CI/CD workflow to build, scan, and deploy Docker images.
 
 ---
 
-## ✨ **Features**
-- **🌐 3 Languages**: English 🇺🇸, Arabic 🇸🇦, French 🇫🇷
-- **💵 USD Currency**: Universal dollar pricing
-- **📸 Photo Uploads**: Clear car photos
-- **🔍 Smart Search**: Filter by price ($10K, $20K, $30K, All)
-- **🗑️ Manage Listings**: View & delete your cars
-- **📞 Direct Contact**: Message sellers instantly
-- **📊 Live Stats**: Market analytics
-- **🎨 Beautiful UI**: Professional design
+## 🏗️ Project Overview
+
+The infrastructure consists of:
+
+- **AWS VPC** with public subnets
+- **ECR Repository** for Docker images
+- **ECS Cluster (Fargate)** to run the Telegram bot container
+- **IAM Roles** for ECS task execution
+- **Security Groups** to manage access
+- **CloudWatch Logs** for monitoring container logs
+
+The setup allows the bot to be updated automatically whenever code changes are pushed to GitHub.
 
 ---
 
-## 🚀 **Quick Start**
+## ⚙️ Terraform Resources
 
-### 1. **Install Dependencies**
+### 1. Provider Configuration
+- AWS provider configured using the region variable
 
-pip install python-telegram-bot==20.7 python-dotenv==1.0.0
+### 2. ECR Repository
+- Stores Docker images
+- Enabled `scan_on_push` for vulnerability scanning
 
-### 2. **Create `.env` file**
-BOT_TOKEN=your_bot_token_here
-IMAGES_DIR=car_images
+### 3. Networking
+- **VPC**: isolated network for resources
+- **Subnets**: public subnets for ECS tasks
+- **Internet Gateway**: allows outbound/inbound Internet access
+- **Route Table**: routes traffic to IGW
 
-**Get Bot Token**: Message [@BotFather](https://t.me/botfather) → `/newbot`
+### 4. Security
+- Security Group: allows inbound HTTP traffic on port 80
+- IAM Role: ECS execution role with proper permissions
 
-### 3. **Run the Bot**
+### 5. ECS Cluster & Tasks
+- **Cluster**: groups ECS tasks
+- **Task Definition**: specifies Docker container configuration
+- **Service**: ensures task is running and healthy
 
-python bot.py
-
-✅ **Bot is live!**
+### 6. Logging
+- CloudWatch Log Group for container logs
 
 ---
 
-## 📁 **Files Needed**
+## 🚀 Deployment Steps
+
+1. **Configure Variables**
+   Update `variables.tf` with:
+   ```hcl
+   variable "aws_region" {}
+   variable "project_name" {}
+   variable "environment" {}
+   variable "vpc_cidr" {}
+````
+
+2. **Initialize Terraform**
+
+   ```bash
+   terraform init
+   ```
+
+3. **Plan Infrastructure**
+
+   ```bash
+   terraform plan
+   ```
+
+4. **Apply Infrastructure**
+
+   ```bash
+   terraform apply
+   ```
+
+5. **Build and Push Docker Image**
+
+   ```bash
+   docker build -t <your-ecr-repo>:latest .
+   aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account_id>.dkr.ecr.<region>.amazonaws.com
+   docker tag <your-image>:latest <account_id>.dkr.ecr.<region>.amazonaws.com/<your-ecr-repo>:latest
+   docker push <account_id>.dkr.ecr.<region>.amazonaws.com/<your-ecr-repo>:latest
+   ```
+
+6. **Update ECS Service**
+
+   * ECS service automatically pulls the latest image if configured with the same task definition
+   * Optionally, update task definition and apply with Terraform
+
+---
+
+## 🔒 Security & Best Practices
+
+* **Secrets**: Store Telegram bot token in AWS Secrets Manager
+* **Vulnerability Scanning**: Enable Trivy or ECR scan on push
+* **Private Subnets**: Move ECS tasks to private subnets with NAT Gateway for enhanced security
+
+---
+
+## 📊 Monitoring
+
+* CloudWatch Logs will capture all container logs
+* Set up CloudWatch Alarms for task failures or high CPU/memory usage
+
+---
+
+## ⚡ CI/CD Integration
+
+* **GitHub Actions**:
+
+  * Build Docker image
+  * Scan with Trivy
+  * Push to ECR
+  * Deploy using Terraform
+* Automates updates whenever code is pushed to the repository
+
+---
+
+## 🖼️ Diagram
 
 ```
-Carroom_bot/
-├── bot.py           # Main bot
-├── database.py      # Database functions
-├── languages.py     # Translations
-├── .env            # Bot token
-└── car_images/     # Photos folder (auto-created)
+[Internet] 
+   ↓
+[Internet Gateway]
+   ↓
+[Route Table]
+   ↓
+[Public Subnet]
+   ├─ ECS Fargate Task (Telegram Bot)
+   └─ Security Group
+[ECS Task] → [ECR] (pull image)
+[ECS Task] → [CloudWatch] (logs)
 ```
 
 ---
 
-## 🎮 **How to Use**
+## 📦 Future Enhancements
 
-### **For Sellers** 🚗
-1. Tap **"🚗 Add Car"**
-2. Fill 8 steps: Model → Year → Price → Miles → Location → Condition → Phone → Photo
-3. ✅ **Your ad is live!**
+* Move ECS tasks to private subnets for better security
+* Add Application Load Balancer (ALB) for webhook routing
+* Integrate RDS or DynamoDB for persistent bot data
+* Automated Terraform with GitHub Actions for full CI/CD
 
-### **For Buyers** 🔍
-1. Tap **"🔍 Browse Cars"**
-2. Choose price: **$10K / $20K / $30K / All**
-3. Tap **"✉️ Message Seller"** or **"📞 Copy Phone"**
-
-### **Manage Your Ads** 🗂️
-1. Tap **"🗂️ My Cars"**
-2. Delete any listing with **"🗑️ Delete"**
-
----
-
-## 🌍 **Languages**
-Users can change language anytime:
-- **🌐 Language** → Choose English / العربية / Français
-
----
-
-## 💳 **Currency: USD**
-```
-💰 Prices in US Dollars only
-• No conversion needed
-• Works worldwide
 ```
 
----
-
-## 🔧 **Commands**
+This README explains your **current Terraform structure**, **services used**, and **deployment workflow**, while giving clear guidance for CI/CD, security, and future improvements.
 ```
-/start    - Main Menu
-/addcar   - Add New Car
-/explore  - Browse Cars
-/mycars   - My Cars
-/stats    - Statistics
-/help     - Help
-/lang     - Change Language
-/cancel   - Cancel
-```
-
----
-
-## 🗄️ **What Bot Stores**
-```
-✅ Car Details: Model, Year, Price, Miles, Location, Condition
-✅ Phone Number (sanitized)
-✅ Photo (saved locally)
-✅ User Language preference
-❌ No passwords or personal data
-```
-
----
-
-## 🛠️ **Troubleshooting**
-
-| **Problem** | **Solution** |
-|-------------|--------------|
-| **Bot not starting** | Check `.env` BOT_TOKEN |
-| **No photos** | Create `car_images/` folder |
-| **Import errors** | `pip install -r requirements.txt` |
-| **Database error** | Delete `cars.db` (bot recreates) |
-
----
-
-## 📱 **Menu Buttons**
-```
-🚗 Add Car     🔍 Browse Cars
-🗂️ My Cars    📊 Stats
-ℹ️ Help       🌐 Language
-```
-
----
-
-## 🎉 **Ready to Go!**
-1. Copy all 3 files: `bot.py`, `database.py`, `languages.py`
-2. Add your `BOT_TOKEN` to `.env`
-3. Run `python bot.py`
-4. Share your bot link! 🚀
-
-**Made for car enthusiasts worldwide!** ❤️
-
-try to contact me :jalalweez@gmail.com 
-Linkedin : https://www.linkedin.com/in/bekhti-djalal/
