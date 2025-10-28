@@ -1,4 +1,4 @@
-name: Docker Build & Scan
+name: Docker Build, Scan & Deploy to ECS
 
 on:
   push:
@@ -11,11 +11,13 @@ env:
   ECR_REGISTRY: 813010034876.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY: telegram-bot
   IMAGE_TAG: ${{ github.sha }}
+  ECS_CLUSTER: telegram-bot-cluster       # ⚠️ REPLACE WITH YOUR CLUSTER NAME
+  ECS_SERVICE: telegram-bot-service        # ⚠️ REPLACE WITH YOUR SERVICE NAME
+  ECS_TASK_DEFINITION: telegram-bot-task    # ⚠️ REPLACE WITH YOUR TASK DEFINITION NAME
 
 jobs:
   docker:
     runs-on: ubuntu-latest
-
     steps:
       # ---------------------------
       # 1️⃣ Checkout repository
@@ -60,17 +62,75 @@ jobs:
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
       # ---------------------------
-      # 6️⃣ Push Docker image to ECR
+      # 6️⃣ Push Docker image to ECR (with commit SHA)
       # ---------------------------
       - name: Push Docker image to ECR
         run: docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       # ---------------------------
-      # 7️⃣ (Optional) Run Checkov for Terraform
+      # 7️⃣ Tag and push as 'latest'
       # ---------------------------
-      # Uncomment if you want IaC scanning
-      # - name: Run Checkov for Terraform
-      #   uses: bridgecrewio/checkov-action@master
-      #   with:
-      #     directory: ./terraform
-      #     framework: terraform
+      - name: Tag and push as latest
+        run: |
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # ---------------------------
+      # 8️⃣ Download current task definition
+      # ---------------------------
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $ECS_TASK_DEFINITION \
+            --query taskDefinition > task-definition.json
+
+      # ---------------------------
+      # 9️⃣ Update task definition with new image
+      # ---------------------------
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Update task definition with new image
+        run: |
+          jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            '.containerDefinitions[0].image = $IMAGE | 
+             del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            task-definition.json > new-task-definition.json
+
+      # ---------------------------
+      # 🔟 Register new task definition
+      # ---------------------------
+      - name: Register new task definition
+        id: register-task-def
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "✅ Registered new task definition: $TASK_DEF_ARN"
+
+      # ---------------------------
+      # 1️⃣1️⃣ Update ECS service with new task definition
+      # ---------------------------
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition ${{ steps.register-task-def.outputs.task_def_arn }} \
+            --force-new-deployment \
+            --region $AWS_REGION
+          echo "✅ ECS service updated successfully"
+
+      # ---------------------------
+      # 1️⃣2️⃣ Wait for service stability (optional)
+      # ---------------------------
+      - name: Wait for service stability
+        run: |
+          echo "⏳ Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --region $AWS_REGION
+          echo "✅ ECS service is now stable"
